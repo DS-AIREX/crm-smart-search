@@ -126,7 +126,7 @@ def chunked(iterable, size):
 # UI
 # ======================================
 
-st.title("📞 Airex Smart CRM Search (Fast)")
+st.title("📞 Airex Smart CRM Search")
 st.markdown("Searches in **20-combination chunks**")
 
 number = st.text_input("Enter Mobile / Phone Number")
