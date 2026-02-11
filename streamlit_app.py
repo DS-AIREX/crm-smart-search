@@ -2,9 +2,10 @@ import streamlit as st
 import xmlrpc.client
 import re
 import pandas as pd
+from itertools import islice
 
 # ======================================
-# ODOO CONNECTION (SECRETS)
+# ODOO CONNECTION
 # ======================================
 
 @st.cache_resource
@@ -29,11 +30,11 @@ models, uid, db, password, base_url = connect_odoo()
 st.success("✅ Connected to Odoo")
 
 # ======================================
-# VARIANT GENERATION (MAX COMBINATIONS)
+# VARIANT GENERATION (LIMITED)
 # ======================================
 
 def normalize(num):
-    return re.sub(r"\D", "", num)
+    return re.sub(r"\D","",num)
 
 def generate_variants(number):
 
@@ -44,31 +45,35 @@ def generate_variants(number):
 
     last10 = digits[-10:]
 
-    base_variants = set()
-
-    # Raw
-    base_variants.add(number)
-    base_variants.add(last10)
-
-    # All possible single-space splits
-    for i in range(2,9):
-        base_variants.add(last10[:i] + " " + last10[i:])
-
-    # Double-space splits
-    for i in range(2,8):
-        for j in range(i+2,9):
-            base_variants.add(
-                last10[:i] + " " + last10[i:j] + " " + last10[j:]
-            )
+    base = set([
+        number,
+        last10,
+        last10[:5] + " " + last10[5:],
+        last10[:3] + " " + last10[3:],
+        last10[:4] + " " + last10[4:]
+    ])
 
     prefixes = ["", "0", "91", "+91", "91 ", "+91 "]
 
-    final = set()
-    for p in prefixes:
-        for v in base_variants:
-            final.add(p + v)
+    final = []
 
-    return list(final)
+    for p in prefixes:
+        for b in base:
+            final.append(p + b)
+
+    return list(dict.fromkeys(final))  # remove duplicates
+
+# ======================================
+# CHUNK HELPER
+# ======================================
+
+def chunked(iterable, size):
+    it = iter(iterable)
+    while True:
+        batch = list(islice(it, size))
+        if not batch:
+            break
+        yield batch
 
 # ======================================
 # BUILD LINK
@@ -81,8 +86,8 @@ def lead_link(lead_id):
 # UI
 # ======================================
 
-st.title("📞 Airex Ultra Smart CRM Search")
-st.markdown("Matches **all number formats & spacing styles**")
+st.title("📞 Airex Smart CRM Search (Fast)")
+st.markdown("Searches in **20-combination chunks**")
 
 number = st.text_input("Enter Mobile / Phone Number")
 search_btn = st.button("🔍 Search")
@@ -94,36 +99,41 @@ search_btn = st.button("🔍 Search")
 if search_btn and number:
 
     variants = generate_variants(number)
-    st.info(f"Trying {len(variants)} combinations")
+    st.info(f"Total combinations: {len(variants)}")
 
     results = []
 
-    for v in variants:
+    for batch in chunked(variants, 20):
 
-        domain = [
-            "|",
-            ("mobile","ilike",v),
-            ("phone","ilike",v)
-        ]
+        for v in batch:
 
-        leads = models.execute_kw(
-            db, uid, password,
-            "crm.lead",
-            "search_read",
-            [domain],
-            {"fields":["id","name","partner_name","user_id","mobile","phone"],"limit":20}
-        )
+            domain = [
+                "|",
+                ("mobile","ilike",v),
+                ("phone","ilike",v)
+            ]
 
-        for l in leads:
-            results.append({
-                "Matched With": v,
-                "Lead Name": l.get("name"),
-                "Company": l.get("partner_name"),
-                "Salesperson": l["user_id"][1] if l.get("user_id") else "",
-                "Stored Mobile": l.get("mobile"),
-                "Stored Phone": l.get("phone"),
-                "Open": lead_link(l["id"])
-            })
+            leads = models.execute_kw(
+                db, uid, password,
+                "crm.lead",
+                "search_read",
+                [domain],
+                {"fields":["id","name","partner_name","user_id","mobile","phone"],"limit":20}
+            )
+
+            for l in leads:
+                results.append({
+                    "Matched With": v,
+                    "Lead Name": l.get("name"),
+                    "Company": l.get("partner_name"),
+                    "Salesperson": l["user_id"][1] if l.get("user_id") else "",
+                    "Stored Mobile": l.get("mobile"),
+                    "Stored Phone": l.get("phone"),
+                    "Open": lead_link(l["id"])
+                })
+
+        if results:
+            break   # stop further batches once found
 
     if results:
         df = pd.DataFrame(results).drop_duplicates()
