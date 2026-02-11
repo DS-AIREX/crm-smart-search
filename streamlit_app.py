@@ -1,6 +1,6 @@
-# ==========================================
-# AIREX SMART CRM SEARCH (SECURE LOGIN + CHUNK SEARCH)
-# ==========================================
+# ======================================
+# AIREX SMART CRM SEARCH (WITH LOGIN)
+# ======================================
 
 import streamlit as st
 import xmlrpc.client
@@ -9,43 +9,33 @@ import pandas as pd
 from itertools import islice
 from datetime import datetime, timedelta
 
-# ----------------------------
-# LOGIN SETTINGS
-# ----------------------------
+# ======================================
+# SIMPLE LOGIN SYSTEM
+# ======================================
 
-USERS = {
-    "airex": "airex111"
-}
-
+USERNAME = "airex"
+PASSWORD = "airex111"
 SESSION_HOURS = 24
 
-# ----------------------------
-# LOGIN FUNCTION
-# ----------------------------
+def login_page():
 
-def login_screen():
+    st.title("🔐 Airex Login")
 
-    st.title("🔐 Airex CRM Login")
+    u = st.text_input("Username")
+    p = st.text_input("Password", type="password")
 
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-    login_btn = st.button("Login")
-
-    if login_btn:
-        if username in USERS and USERS[username] == password:
-            st.session_state["logged_in"] = True
+    if st.button("Login"):
+        if u == USERNAME and p == PASSWORD:
+            st.session_state["logged"] = True
             st.session_state["login_time"] = datetime.now()
-            st.success("✅ Login successful")
+            st.success("✅ Login Successful")
             st.rerun()
         else:
-            st.error("❌ Invalid credentials")
+            st.error("❌ Wrong Username or Password")
 
-# ----------------------------
-# SESSION CHECK
-# ----------------------------
+def check_login():
 
-def check_session():
-    if "logged_in" not in st.session_state:
+    if "logged" not in st.session_state:
         return False
 
     if datetime.now() - st.session_state["login_time"] > timedelta(hours=SESSION_HOURS):
@@ -54,144 +44,139 @@ def check_session():
 
     return True
 
-# ----------------------------
+# ======================================
 # ODOO CONNECTION
-# ----------------------------
+# ======================================
 
 @st.cache_resource
 def connect_odoo():
-    url = "http://103.12.1.110:8991"
-    db = "airexheaters"
-    username = "prateek@airexheaters.com"
-    password = "airex@12345"
+    url = st.secrets["ODOO_URL"]
+    db = st.secrets["ODOO_DB"]
+    user = st.secrets["ODOO_USER"]
+    password = st.secrets["ODOO_PASS"]
 
     common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
     models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
 
-    uid = common.authenticate(db, username, password, {})
-
+    uid = common.authenticate(db, user, password, {})
     if not uid:
         st.error("❌ Odoo Login Failed")
         st.stop()
 
-    return models, uid, db, password
+    return models, uid, db, password, url
 
-models, uid, db, password = connect_odoo()
+# ======================================
+# LOGIN CHECK FIRST
+# ======================================
 
-# ----------------------------
-# CLEAN NUMBER
-# ----------------------------
+if not check_login():
+    login_page()
+    st.stop()
+
+models, uid, db, password, base_url = connect_odoo()
+st.success("✅ Connected to Odoo")
+
+# ======================================
+# VARIANT GENERATION (LIMITED)
+# ======================================
 
 def normalize(num):
-    return re.sub(r"\D", "", num)
-
-# ----------------------------
-# GENERATE VARIANTS
-# ----------------------------
+    return re.sub(r"\D","",num)
 
 def generate_variants(number):
 
-    base = normalize(number)
+    digits = normalize(number)
 
-    if base.startswith("91"):
-        base = base[2:]
+    if digits.startswith("91"):
+        digits = digits[2:]
 
-    variants = set()
+    last10 = digits[-10:]
 
-    variants.add(base)
-
-    for i in [3,4,5]:
-        variants.add(base[:i] + " " + base[i:])
+    base = set([
+        number,
+        last10,
+        last10[:5] + " " + last10[5:],
+        last10[:3] + " " + last10[3:],
+        last10[:4] + " " + last10[4:]
+    ])
 
     prefixes = ["", "0", "91", "+91", "91 ", "+91 "]
 
-    final = set()
+    final = []
 
     for p in prefixes:
-        for v in variants:
-            final.add(p + v)
+        for b in base:
+            final.append(p + b)
 
-    return list(final)
+    return list(dict.fromkeys(final))
 
-# ----------------------------
-# CHUNK GENERATOR
-# ----------------------------
+# ======================================
+# CHUNK HELPER
+# ======================================
 
 def chunked(iterable, size):
     it = iter(iterable)
     while True:
-        chunk = list(islice(it, size))
-        if not chunk:
+        batch = list(islice(it, size))
+        if not batch:
             break
-        yield chunk
+        yield batch
 
-# ----------------------------
-# SEARCH FUNCTION
-# ----------------------------
+# ======================================
+# UI
+# ======================================
 
-def search_lead(number):
+st.title("📞 Airex Smart CRM Search (Fast)")
+st.markdown("Searches in **20-combination chunks**")
+
+number = st.text_input("Enter Mobile / Phone Number")
+search_btn = st.button("🔍 Search")
+
+# ======================================
+# SEARCH
+# ======================================
+
+if search_btn and number:
 
     variants = generate_variants(number)
+    st.info(f"Total combinations: {len(variants)}")
 
-    found = []
+    results = []
 
     for batch in chunked(variants, 20):
 
-        domain = []
-
         for v in batch:
-            domain += ["|", ("mobile","=",v), ("phone","=",v)]
 
-        domain = domain[1:]
+            domain = [
+                "|",
+                ("mobile","ilike",v),
+                ("phone","ilike",v)
+            ]
 
-        leads = models.execute_kw(
-            db, uid, password,
-            "crm.lead",
-            "search_read",
-            [domain],
-            {
-                "fields":["name","partner_name","user_id","mobile","phone"],
-                "limit":10
-            }
-        )
+            leads = models.execute_kw(
+                db, uid, password,
+                "crm.lead",
+                "search_read",
+                [domain],
+                {"fields":["name","partner_name","user_id","mobile","phone"],"limit":20}
+            )
 
-        if leads:
             for l in leads:
-                found.append({
+                results.append({
+                    "Matched With": v,
                     "Lead Name": l.get("name"),
                     "Company": l.get("partner_name"),
                     "Salesperson": l["user_id"][1] if l.get("user_id") else "",
-                    "Mobile": l.get("mobile"),
-                    "Phone": l.get("phone")
+                    "Stored Mobile": l.get("mobile"),
+                    "Stored Phone": l.get("phone")
                 })
 
-    return found
+        if results:
+            break
 
-# ----------------------------
-# MAIN APP
-# ----------------------------
-
-if not check_session():
-    login_screen()
-    st.stop()
-
-st.set_page_config(page_title="Airex Smart CRM Search", layout="wide")
-st.title("📞 Airex Smart CRM Search")
-
-number = st.text_input("Enter Mobile Number")
-
-if st.button("🔍 Search"):
-
-    if not number:
-        st.warning("Enter a number")
+    if results:
+        df = pd.DataFrame(results).drop_duplicates()
+        st.success(f"✅ {len(df)} Lead(s) Found")
+        st.dataframe(df, use_container_width=True)
     else:
-        with st.spinner("Searching..."):
-            result = search_lead(number)
-
-        if result:
-            df = pd.DataFrame(result)
-            st.success(f"✅ {len(df)} lead(s) found")
-            st.dataframe(df, use_container_width=True)
-        else:
-            st.error("❌ No lead found")
-
+        st.warning("❌ No lead found")
