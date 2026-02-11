@@ -36,7 +36,7 @@ def login_screen():
             st.session_state["logged_in"] = True
             st.session_state["login_time"] = datetime.now()
             st.success("✅ Login successful")
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("❌ Invalid credentials")
 
