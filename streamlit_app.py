@@ -3,22 +3,21 @@ import xmlrpc.client
 import re
 import pandas as pd
 
-# =========================================
-# ODOO CONNECTION (FROM SECRETS)
-# =========================================
+# ======================================
+# ODOO CONNECTION (SECRETS)
+# ======================================
 
 @st.cache_resource
-def get_odoo_connection():
+def connect_odoo():
     url = st.secrets["ODOO_URL"]
     db = st.secrets["ODOO_DB"]
-    username = st.secrets["ODOO_USER"]
+    user = st.secrets["ODOO_USER"]
     password = st.secrets["ODOO_PASS"]
 
     common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
     models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
 
-    uid = common.authenticate(db, username, password, {})
-
+    uid = common.authenticate(db, user, password, {})
     if not uid:
         st.error("❌ Odoo Login Failed")
         st.stop()
@@ -26,57 +25,78 @@ def get_odoo_connection():
     return models, uid, db, password, url
 
 
-models, uid, db, password, base_url = get_odoo_connection()
+models, uid, db, password, base_url = connect_odoo()
 st.success("✅ Connected to Odoo")
 
-# =========================================
-# UTILITIES
-# =========================================
+# ======================================
+# VARIANT GENERATION (MAX COMBINATIONS)
+# ======================================
 
 def normalize(num):
-    return re.sub(r"\D","",num)
+    return re.sub(r"\D", "", num)
 
-def generate_variants(num):
+def generate_variants(number):
 
-    base = normalize(num)
+    digits = normalize(number)
 
-    if base.startswith("91"):
-        base = base[2:]
+    if digits.startswith("91"):
+        digits = digits[2:]
 
-    last10 = base[-10:]
+    last10 = digits[-10:]
 
-    return list(set([
-        last10,
-        base,
-        "0" + last10,
-        "91" + last10,
-        "+91" + last10,
-        num
-    ]))
+    base_variants = set()
 
-def build_link(lead_id):
+    # Raw
+    base_variants.add(number)
+    base_variants.add(last10)
+
+    # All possible single-space splits
+    for i in range(2,9):
+        base_variants.add(last10[:i] + " " + last10[i:])
+
+    # Double-space splits
+    for i in range(2,8):
+        for j in range(i+2,9):
+            base_variants.add(
+                last10[:i] + " " + last10[i:j] + " " + last10[j:]
+            )
+
+    prefixes = ["", "0", "91", "+91", "91 ", "+91 "]
+
+    final = set()
+    for p in prefixes:
+        for v in base_variants:
+            final.add(p + v)
+
+    return list(final)
+
+# ======================================
+# BUILD LINK
+# ======================================
+
+def lead_link(lead_id):
     return f"{base_url}/web#id={lead_id}&model=crm.lead&view_type=form"
 
-# =========================================
+# ======================================
 # UI
-# =========================================
+# ======================================
 
-st.title("📞 Airex Smart CRM Search")
-st.markdown("Search lead using mobile or phone number")
+st.title("📞 Airex Ultra Smart CRM Search")
+st.markdown("Matches **all number formats & spacing styles**")
 
-number = st.text_input("Enter Mobile Number")
+number = st.text_input("Enter Mobile / Phone Number")
 search_btn = st.button("🔍 Search")
 
-# =========================================
+# ======================================
 # SEARCH
-# =========================================
+# ======================================
 
 if search_btn and number:
 
     variants = generate_variants(number)
-    st.write("Trying Variants:", variants)
+    st.info(f"Trying {len(variants)} combinations")
 
-    found = []
+    results = []
 
     for v in variants:
 
@@ -95,17 +115,18 @@ if search_btn and number:
         )
 
         for l in leads:
-            found.append({
+            results.append({
+                "Matched With": v,
                 "Lead Name": l.get("name"),
                 "Company": l.get("partner_name"),
                 "Salesperson": l["user_id"][1] if l.get("user_id") else "",
-                "Mobile": l.get("mobile"),
-                "Phone": l.get("phone"),
-                "Open": build_link(l["id"])
+                "Stored Mobile": l.get("mobile"),
+                "Stored Phone": l.get("phone"),
+                "Open": lead_link(l["id"])
             })
 
-    if found:
-        df = pd.DataFrame(found)
+    if results:
+        df = pd.DataFrame(results).drop_duplicates()
         st.success(f"✅ {len(df)} Lead(s) Found")
         st.dataframe(df, use_container_width=True)
     else:
