@@ -61,7 +61,7 @@ def generate_variants(number):
         for b in base:
             final.append(p + b)
 
-    return list(dict.fromkeys(final))  # remove duplicates
+    return list(dict.fromkeys(final))
 
 # ======================================
 # CHUNK HELPER
@@ -74,13 +74,6 @@ def chunked(iterable, size):
         if not batch:
             break
         yield batch
-
-# ======================================
-# BUILD LINK
-# ======================================
-
-def lead_link(lead_id):
-    return f"{base_url}/web#id={lead_id}&model=crm.lead&view_type=form"
 
 # ======================================
 # UI
@@ -118,7 +111,7 @@ if search_btn and number:
                 "crm.lead",
                 "search_read",
                 [domain],
-                {"fields":["id","name","partner_name","user_id","mobile","phone"],"limit":20}
+                {"fields":["name","partner_name","user_id","mobile","phone"],"limit":20}
             )
 
             for l in leads:
@@ -128,12 +121,11 @@ if search_btn and number:
                     "Company": l.get("partner_name"),
                     "Salesperson": l["user_id"][1] if l.get("user_id") else "",
                     "Stored Mobile": l.get("mobile"),
-                    "Stored Phone": l.get("phone"),
-                    "Open": lead_link(l["id"])
+                    "Stored Phone": l.get("phone")
                 })
 
         if results:
-            break   # stop further batches once found
+            break
 
     if results:
         df = pd.DataFrame(results).drop_duplicates()
