@@ -168,7 +168,8 @@ if search_btn and number:
                     "Company": l.get("partner_name"),
                     "Salesperson": l["user_id"][1] if l.get("user_id") else "",
                     "Stored Mobile": l.get("mobile"),
-                    "Stored Phone": l.get("phone")
+                    "Stored Phone": l.get("phone"),
+                    "Stage":l.get("stage_id")
                 })
 
         if results:
