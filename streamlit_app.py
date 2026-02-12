@@ -158,7 +158,7 @@ if search_btn and number:
                 "crm.lead",
                 "search_read",
                 [domain],
-                {"fields":["name","partner_name","user_id","mobile","phone"],"limit":20}
+                {"fields":["name","partner_name","user_id","mobile","phone","stage_id"],"limit":20}
             )
 
             for l in leads:
