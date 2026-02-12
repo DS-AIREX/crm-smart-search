@@ -169,7 +169,7 @@ if search_btn and number:
                     "Salesperson": l["user_id"][1] if l.get("user_id") else "",
                     "Stored Mobile": l.get("mobile"),
                     "Stored Phone": l.get("phone"),
-                    "Stage":l.get("stage_id")
+                    "Stage": l["stage_id"][1] if l.get("stage_id") else "",
                 })
 
         if results:
