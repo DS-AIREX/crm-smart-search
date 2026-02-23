@@ -77,7 +77,7 @@ models, uid, db, password, base_url = connect_odoo()
 st.success("✅ Connected to Odoo")
 
 # ======================================
-# VARIANT GENERATION (LIMITED)
+# VARIANT GENERATION
 # ======================================
 
 def normalize(num):
@@ -127,7 +127,7 @@ def chunked(iterable, size):
 # ======================================
 
 st.title("📞 Airex Smart CRM Search")
-st.markdown("Searches in **20-combination chunks**")
+st.markdown("Searches in **20-combination chunks** (Includes Lost Leads)")
 
 number = st.text_input("Enter Mobile / Phone Number")
 search_btn = st.button("🔍 Search")
@@ -148,6 +148,8 @@ if search_btn and number:
         for v in batch:
 
             domain = [
+                "&",
+                ("active", "in", [True, False]),  # 🔥 This line fixes lost lead issue
                 "|",
                 ("mobile","ilike",v),
                 ("phone","ilike",v)
@@ -158,7 +160,18 @@ if search_btn and number:
                 "crm.lead",
                 "search_read",
                 [domain],
-                {"fields":["name","partner_name","user_id","mobile","phone","stage_id"],"limit":20}
+                {
+                    "fields":[
+                        "name",
+                        "partner_name",
+                        "user_id",
+                        "mobile",
+                        "phone",
+                        "stage_id",
+                        "active"
+                    ],
+                    "limit":50
+                }
             )
 
             for l in leads:
@@ -170,6 +183,7 @@ if search_btn and number:
                     "Stored Mobile": l.get("mobile"),
                     "Stored Phone": l.get("phone"),
                     "Stage": l["stage_id"][1] if l.get("stage_id") else "",
+                    "Status": "Lost / Archived" if not l.get("active") else "Active"
                 })
 
         if results:
@@ -177,7 +191,7 @@ if search_btn and number:
 
     if results:
         df = pd.DataFrame(results).drop_duplicates()
-        st.success(f"✅ {len(df)} Lead(s) Found")
+        st.success(f"✅ {len(df)} Lead(s) Found (Including Lost)")
         st.dataframe(df, use_container_width=True)
     else:
         st.warning("❌ No lead found")
