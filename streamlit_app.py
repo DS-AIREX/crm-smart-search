@@ -10,6 +10,10 @@ from itertools import islice
 from datetime import datetime, timedelta
 import socket
 import time
+import base64  # ➕ ADD THIS
+from github import Github  # ➕ ADD THIS
+import importlib.util  # ➕ ADD THIS
+import sys  # ➕ ADD THIS
 
 # ======================================
 # SECURITY SETTINGS
@@ -21,6 +25,11 @@ socket.setdefaulttimeout(20)
 # Load credentials from Streamlit secrets
 USERNAME = st.secrets["APP_USERNAME"]
 PASSWORD = st.secrets["APP_PASSWORD"]
+
+# ➕ ADD: GitHub credentials for fetching code
+GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]  # Your private repo token
+GITHUB_REPO = st.secrets["GITHUB_REPO_NAME"]  # Your repo name: "username/odoo-daily-report"
+GITHUB_CODE_PATH = st.secrets.get("GITHUB_CODE_PATH", "crm_search_app.py")  # Path to your search app code
 
 SESSION_HOURS = 24
 MAX_LOGIN_ATTEMPTS = 5
@@ -157,6 +166,62 @@ def connect_odoo():
     return models, uid, db, password, url
 
 # ======================================
+# ➕ FETCH CODE FROM PRIVATE GITHUB REPO
+# ======================================
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def fetch_code_from_github():
+    """Fetch the CRM search app code from private GitHub repo"""
+    try:
+        g = Github(GITHUB_TOKEN)
+        repo = g.get_repo(GITHUB_REPO)
+        
+        # Get the file content
+        contents = repo.get_contents(GITHUB_CODE_PATH)
+        
+        # Decode the content
+        code_content = base64.b64decode(contents.content).decode('utf-8')
+        
+        return code_content
+        
+    except Exception as e:
+        st.error(f"❌ Failed to fetch code from GitHub: {str(e)}")
+        st.error(f"Make sure file '{GITHUB_CODE_PATH}' exists in repo '{GITHUB_REPO}'")
+        return None
+
+@st.cache_resource
+def load_crm_search_module():
+    """Load the CRM search code as a module"""
+    code = fetch_code_from_github()
+    
+    if not code:
+        return None
+    
+    try:
+        # Create a temporary module
+        module_name = "crm_search_app"
+        
+        # Remove old module if exists
+        if module_name in sys.modules:
+            del sys.modules[module_name]
+        
+        # Create new module from code
+        spec = importlib.util.spec_from_loader(module_name, loader=None)
+        module = importlib.util.module_from_spec(spec)
+        
+        # Execute the code in the module context
+        exec(code, module.__dict__)
+        
+        # Store in sys.modules
+        sys.modules[module_name] = module
+        
+        return module
+        
+    except Exception as e:
+        st.error(f"❌ Error loading CRM search module: {str(e)}")
+        return None
+
+# ======================================
 # LOGIN CHECK FIRST
 # ======================================
 
@@ -181,193 +246,168 @@ if st.button("🚪 Logout"):
     st.rerun()
 
 # ======================================
-# NUMBER NORMALIZATION
+# ➕ FETCH AND EXECUTE CRM SEARCH FROM GITHUB
 # ======================================
 
-def normalize(num):
-    return re.sub(r"\D", "", str(num))
+# Fetch the CRM search app code from your private repo
+with st.spinner("📥 Loading CRM Search from GitHub repository..."):
+    crm_module = load_crm_search_module()
 
-# ======================================
-# PHONE NUMBER MASKING
-# ======================================
-
-def mask_number(num):
-
-    if not num:
-        return ""
-
-    digits = normalize(num)
-
-    if len(digits) >= 10:
-        return digits[:5] + "XXXXX"
-
-    return "XXXXX"
-
-# ======================================
-# VARIANT GENERATION
-# ======================================
-
-def generate_variants(number):
-
-    digits = normalize(number)
-
-    if digits.startswith("91"):
-        digits = digits[2:]
-
-    last10 = digits[-10:]
-
-    base = set([
-        number,
-        last10,
-        last10[:5] + " " + last10[5:],
-        last10[:3] + " " + last10[3:],
-        last10[:4] + " " + last10[4:]
-    ])
-
-    prefixes = ["", "0", "91", "+91", "91 ", "+91 "]
-
-    final = []
-
-    for p in prefixes:
-        for b in base:
-            final.append(p + b)
-
-    return list(dict.fromkeys(final))
-
-# ======================================
-# CHUNK HELPER
-# ======================================
-
-def chunked(iterable, size):
-
-    it = iter(iterable)
-
-    while True:
-
-        batch = list(islice(it, size))
-
-        if not batch:
-            break
-
-        yield batch
-
-# ======================================
-# UI
-# ======================================
-
-st.title("📞 Airex Smart CRM Search")
-
-st.markdown(
-    "Searches in **20-combination chunks** (Includes Lost Leads)"
-)
-
-number = st.text_input(
-    "Enter Mobile / Phone Number",
-    max_chars=15
-)
-
-search_btn = st.button("🔍 Search")
-
-# ======================================
-# SEARCH
-# ======================================
-
-if search_btn and number:
-
-    digits = normalize(number)
-
-    # Input validation
-    if len(digits) < 10 or len(digits) > 15:
-        st.error("❌ Enter valid mobile number")
-        st.stop()
-
-    variants = generate_variants(number)
-
-    st.info(f"Total combinations: {len(variants)}")
-
-    results = []
-
-    for batch in chunked(variants, 20):
-
-        for v in batch:
-
-            domain = [
-                "&",
-                ("active", "in", [True, False]),
-                "|",
-                ("mobile", "ilike", v),
-                ("phone", "ilike", v)
-            ]
-
-            try:
-
-                leads = models.execute_kw(
-                    db,
-                    uid,
-                    password,
-                    "crm.lead",
-                    "search_read",
-                    [domain],
-                    {
-                        "fields": [
-                            "name",
-                            "partner_name",
-                            "user_id",
-                            "mobile",
-                            "phone",
-                            "stage_id",
-                            "active"
-                        ],
-                        "limit": 50
-                    }
-                )
-
-                for l in leads:
-
-                    results.append({
-                        "Matched With": v,
-                        "Lead Name": l.get("name"),
-                        "Company": l.get("partner_name"),
-                        "Salesperson": (
-                            l["user_id"][1]
-                            if l.get("user_id")
-                            else ""
-                        ),
-                        "Stored Mobile": mask_number(
-                            l.get("mobile")
-                        ),
-                        "Stored Phone": mask_number(
-                            l.get("phone")
-                        ),
-                        "Stage": (
-                            l["stage_id"][1]
-                            if l.get("stage_id")
-                            else ""
-                        ),
-                        "Status": (
-                            "Lost / Archived"
-                            if not l.get("active")
-                            else "Active"
-                        )
-                    })
-
-            except Exception:
-                st.error("❌ Error while fetching data from Odoo")
-                st.stop()
-
-        if results:
-            break
-
-    if results:
-
-        df = pd.DataFrame(results).drop_duplicates()
-
-        st.success(
-            f"✅ {len(df)} Lead(s) Found (Including Lost)"
+if crm_module:
+    st.success(f"✅ CRM Search loaded from: {GITHUB_REPO}/{GITHUB_CODE_PATH}")
+    
+    # The module should have all the functions and UI elements
+    # It will automatically render its UI when we call its main functionality
+    
+    # Check if the module has the necessary functions
+    if hasattr(crm_module, 'normalize'):
+        # Use the functions from the fetched module
+        normalize = crm_module.normalize
+        mask_number = crm_module.mask_number
+        generate_variants = crm_module.generate_variants
+        chunked = crm_module.chunked
+        
+        # Now run the UI part (your original search UI code)
+        # ======================================
+        # UI (from your original code)
+        # ======================================
+        
+        st.title("📞 Airex Smart CRM Search")
+        
+        st.markdown(
+            "Searches in **20-combination chunks** (Includes Lost Leads)"
         )
-
-        st.dataframe(df, use_container_width=True)
-
+        
+        number = st.text_input(
+            "Enter Mobile / Phone Number",
+            max_chars=15
+        )
+        
+        search_btn = st.button("🔍 Search")
+        
+        # ======================================
+        # SEARCH
+        # ======================================
+        
+        if search_btn and number:
+            
+            digits = normalize(number)
+            
+            # Input validation
+            if len(digits) < 10 or len(digits) > 15:
+                st.error("❌ Enter valid mobile number")
+                st.stop()
+            
+            variants = generate_variants(number)
+            
+            st.info(f"Total combinations: {len(variants)}")
+            
+            results = []
+            
+            for batch in chunked(variants, 20):
+                
+                for v in batch:
+                    
+                    domain = [
+                        "&",
+                        ("active", "in", [True, False]),
+                        "|",
+                        ("mobile", "ilike", v),
+                        ("phone", "ilike", v)
+                    ]
+                    
+                    try:
+                        
+                        leads = models.execute_kw(
+                            db,
+                            uid,
+                            password,
+                            "crm.lead",
+                            "search_read",
+                            [domain],
+                            {
+                                "fields": [
+                                    "name",
+                                    "partner_name",
+                                    "user_id",
+                                    "mobile",
+                                    "phone",
+                                    "stage_id",
+                                    "active"
+                                ],
+                                "limit": 50
+                            }
+                        )
+                        
+                        for l in leads:
+                            
+                            results.append({
+                                "Matched With": v,
+                                "Lead Name": l.get("name"),
+                                "Company": l.get("partner_name"),
+                                "Salesperson": (
+                                    l["user_id"][1]
+                                    if l.get("user_id")
+                                    else ""
+                                ),
+                                "Stored Mobile": mask_number(
+                                    l.get("mobile")
+                                ),
+                                "Stored Phone": mask_number(
+                                    l.get("phone")
+                                ),
+                                "Stage": (
+                                    l["stage_id"][1]
+                                    if l.get("stage_id")
+                                    else ""
+                                ),
+                                "Status": (
+                                    "Lost / Archived"
+                                    if not l.get("active")
+                                    else "Active"
+                                )
+                            })
+                    
+                    except Exception:
+                        st.error("❌ Error while fetching data from Odoo")
+                        st.stop()
+                
+                if results:
+                    break
+            
+            if results:
+                
+                df = pd.DataFrame(results).drop_duplicates()
+                
+                st.success(
+                    f"✅ {len(df)} Lead(s) Found (Including Lost)"
+                )
+                
+                st.dataframe(df, use_container_width=True)
+                
+            else:
+                
+                st.warning("❌ No lead found")
+    
     else:
+        st.error("❌ Fetched code doesn't contain required functions")
+        st.code("Make sure your GitHub file contains: normalize(), mask_number(), generate_variants(), chunked()")
 
-        st.warning("❌ No lead found")
+else:
+    st.error("❌ Could not load CRM search from GitHub")
+
+# ======================================
+# ➕ OPTIONAL: SHOW CODE INFO IN SIDEBAR
+# ======================================
+
+with st.sidebar:
+    st.divider()
+    st.caption("📦 Code Source")
+    st.caption(f"Repo: `{GITHUB_REPO}`")
+    st.caption(f"File: `{GITHUB_CODE_PATH}`")
+    
+    if st.button("🔄 Reload Code from GitHub"):
+        # Clear cache and reload
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
